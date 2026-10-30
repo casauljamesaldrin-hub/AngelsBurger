@@ -1,0 +1,46 @@
+﻿import { Navigate, Route, Routes } from 'react-router-dom';
+import { ReactNode } from 'react';
+import { useAuth } from './lib/auth';
+import { Loading } from './components/ui';
+import AppLayout from './layouts/AppLayout';
+import { ForgotPage, LoginPage, ResetPage } from './pages/AuthPages';
+import Dashboard from './pages/Dashboard';
+import Inventory from './pages/Inventory';
+import Products from './pages/Products';
+import Suppliers from './pages/Suppliers';
+import Orders from './pages/Orders';
+import Transactions from './pages/Transactions';
+import Reports from './pages/Reports';
+import { AuditPage, EmailPage, SettingsPage, StaffPage } from './pages/AdminPages';
+
+function Guard({ children, admin }: { children: ReactNode; admin?: boolean }) {
+  const { me, loading } = useAuth();
+  if (loading) return <Loading />;
+  if (!me) return <Navigate to="/login" replace />;
+  if (admin && me.role !== 'ADMIN') return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
+
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/forgot-password" element={<ForgotPage />} />
+      <Route path="/reset-password" element={<ResetPage />} />
+      <Route element={<Guard><AppLayout /></Guard>}>
+        <Route index element={<Dashboard />} />
+        <Route path="inventory" element={<Inventory />} />
+        <Route path="menu" element={<Products />} />
+        <Route path="suppliers" element={<Suppliers />} />
+        <Route path="orders" element={<Orders />} />
+        <Route path="transactions" element={<Transactions />} />
+        <Route path="reports" element={<Guard admin><Reports /></Guard>} />
+        <Route path="email" element={<Guard admin><EmailPage /></Guard>} />
+        <Route path="staff" element={<Guard admin><StaffPage /></Guard>} />
+        <Route path="audit" element={<Guard admin><AuditPage /></Guard>} />
+        <Route path="settings" element={<Guard admin><SettingsPage /></Guard>} />
+      </Route>
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  );
+}

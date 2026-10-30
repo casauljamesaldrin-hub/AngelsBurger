@@ -1,0 +1,104 @@
+import { useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Plus } from 'lucide-react';
+import { api, apiFull } from '../lib/api';
+import { when } from '../lib/format';
+import { useAuth } from '../lib/auth';
+import { Badge, Empty, ErrorBox, Field, Loading, Modal, PageHead, Pager, useToast } from '../components/ui';
+
+function NewUser({ onClose }: { onClose: () => void }) {
+  const qc = useQueryClient(); const toast = useToast();
+  const [v, setV] = useState({ name: '', email: '', password: '', role: 'STAFF' });
+  const m = useMutation({ mutationFn: () => api('/users', { body: v }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['users'] }); toast('ok', 'Account created'); onClose(); }, onError: (e: Error) => toast('err', e.message) });
+  return (
+    <Modal title="Add staff account" onClose={onClose}>
+      <Field label="Name"><input className="input" value={v.name} onChange={(e) => setV({ ...v, name: e.target.value })} /></Field>
+      <Field label="Email"><input className="input" type="email" value={v.email} onChange={(e) => setV({ ...v, email: e.target.value })} /></Field>
+      <Field label="Temporary password (10+ characters, with a letter and a number)"><input className="input" type="password" autoComplete="new-password" value={v.password} onChange={(e) => setV({ ...v, password: e.target.value })} /></Field>
+      <Field label="Role"><select className="input" value={v.role} onChange={(e) => setV({ ...v, role: e.target.value })}><option value="STAFF">Staff</option><option value="ADMIN">Admin</option></select></Field>
+      <div className="flex justify-end gap-2"><button className="btn" onClick={onClose}>Cancel</button><button className="btn btn-primary" disabled={m.isPending} onClick={() => m.mutate()}>Create account</button></div>
+    </Modal>
+  );
+}
+
+export function StaffPage() {
+  const { me } = useAuth(); const qc = useQueryClient(); const toast = useToast(); const [add, setAdd] = useState(false);
+  const q = useQuery({ queryKey: ['users'], queryFn: () => api('/users') });
+  const patch = useMutation({ mutationFn: ({ id, body }: { id: string; body: object }) => api(`/users/${id}`, { method: 'PATCH', body }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['users'] }); toast('ok', 'Saved'); }, onError: (e: Error) => toast('err', e.message) });
+  return (
+    <>
+      <PageHead title="Staff"><button className="btn btn-primary" onClick={() => setAdd(true)}><Plus size={16} />Add account</button></PageHead>
+      <p className="text-sm text-neutral-600 mb-3">Email alerts go only to the active accounts ticked below.</p>
+      <div className="card overflow-x-auto">{q.isLoading ? <Loading /> : q.error ? <ErrorBox error={q.error} /> : (
+        <table className="w-full"><thead className="border-b border-line"><tr>{['Name', 'Email', 'Role', 'Status', 'Low stock', 'Out of stock', 'Daily summary', ''].map((h) => <th key={h} className="th">{h}</th>)}</tr></thead>
+          <tbody className="divide-y divide-line">{q.data.map((u: any) => (
+            <tr key={u.id} className={u.active ? '' : 'opacity-60'}><td className="td font-medium">{u.name}</td><td className="td">{u.email}</td><td className="td">{u.role === 'ADMIN' ? 'Admin' : 'Staff'}</td><td className="td">{u.active ? 'Active' : 'Deactivated'}</td>
+              {(['notifyLowStock', 'notifyOutOfStock', 'notifyDailySummary'] as const).map((k) => <td key={k} className="td"><input type="checkbox" aria-label={`${k} for ${u.name}`} checked={u[k]} onChange={(e) => patch.mutate({ id: u.id, body: { [k]: e.target.checked } })} /></td>)}
+              <td className="td">{u.id !== me?.id && <button className="btn !px-2.5 !py-1" onClick={() => confirm(`${u.active ? 'Deactivate' : 'Reactivate'} ${u.name}?`) && patch.mutate({ id: u.id, body: { active: !u.active } })}>{u.active ? 'Deactivate' : 'Reactivate'}</button>}</td></tr>))}</tbody></table>)}</div>
+      {add && <NewUser onClose={() => setAdd(false)} />}
+    </>
+  );
+}
+
+export function EmailPage() {
+  const qc = useQueryClient(); const toast = useToast(); const [page, setPage] = useState(1);
+  const st = useQuery({ queryKey: ['email-status'], queryFn: () => api('/email/status') });
+  const users = useQuery({ queryKey: ['users'], queryFn: () => api('/users') });
+  const [to, setTo] = useState('');
+  const hist = useQuery({ queryKey: ['email-hist', page], queryFn: () => api(`/email/notifications?page=${page}&pageSize=15`) });
+  const test = useMutation({ mutationFn: () => apiFull('/email/test', { body: { userId: to || undefined } }), onSuccess: (r) => { toast('ok', r.message); qc.invalidateQueries({ queryKey: ['email-hist'] }); }, onError: (e: Error) => { toast('err', e.message); qc.invalidateQueries({ queryKey: ['email-hist'] }); } });
+  const proc = useMutation({ mutationFn: () => api('/email/process', { body: {} }), onSuccess: (r: any) => { toast('ok', `Processed ${r.processed}: ${r.accepted} accepted, ${r.failed} failed`); qc.invalidateQueries({ queryKey: ['email-hist'] }); }, onError: (e: Error) => toast('err', e.message) });
+  return (
+    <>
+      <PageHead title="Email notifications" />
+      <section className="card p-4 mb-4">
+        {st.data && (st.data.configured
+          ? <p className="text-sm">Brevo is configured. Sender: <b>{st.data.senderEmail}</b>. “Accepted” means Brevo took the message; check the inbox to confirm arrival.</p>
+          : <p className="text-sm text-ketchup" role="alert">Email is not configured. Missing on the server: <b>{st.data.missing.join(', ')}</b>. Add them to the backend environment and restart. See the README.</p>)}
+        <div className="flex flex-wrap gap-2 mt-3">
+          <select className="input !w-auto" aria-label="Send test to" value={to} onChange={(e) => setTo(e.target.value)}><option value="">Me</option>{users.data?.filter((u: any) => u.active).map((u: any) => <option key={u.id} value={u.id}>{u.name} ({u.email})</option>)}</select>
+          <button className="btn btn-primary" disabled={test.isPending} onClick={() => test.mutate()}>{test.isPending ? 'Sending…' : 'Send test email'}</button>
+          <button className="btn" disabled={proc.isPending} onClick={() => proc.mutate()}>Retry pending emails</button>
+        </div>
+        <p className="text-xs text-neutral-600 mt-2">Choose who receives low-stock, out-of-stock and daily-summary emails on the Staff page.</p>
+      </section>
+      <div className="card overflow-x-auto">{hist.isLoading ? <Loading /> : hist.error ? <ErrorBox error={hist.error} /> : !hist.data.items.length ? <Empty title="No emails sent yet" /> : (<>
+        <table className="w-full"><thead className="border-b border-line"><tr>{['When', 'Type', 'To', 'Subject', 'Status', 'Tries', 'Note'].map((h) => <th key={h} className="th">{h}</th>)}</tr></thead>
+          <tbody className="divide-y divide-line">{hist.data.items.map((n: any) => <tr key={n.id}><td className="td">{when(n.createdAt)}</td><td className="td">{n.type.replace(/_/g, ' ').toLowerCase()}</td><td className="td">{n.recipient}</td><td className="td">{n.subject}</td><td className="td"><Badge v={n.status} /></td><td className="td">{n.attempts}</td><td className="td text-xs text-neutral-600">{n.error ?? n.providerMessageId ?? ''}</td></tr>)}</tbody></table>
+        <Pager page={hist.data.page} pageSize={hist.data.pageSize} total={hist.data.total} onPage={setPage} /></>)}</div>
+    </>
+  );
+}
+
+export function AuditPage() {
+  const [page, setPage] = useState(1);
+  const q = useQuery({ queryKey: ['audit', page], queryFn: () => api(`/audit-logs?page=${page}&pageSize=25`) });
+  return (
+    <>
+      <PageHead title="Audit log" />
+      <div className="card overflow-x-auto">{q.isLoading ? <Loading /> : q.error ? <ErrorBox error={q.error} /> : !q.data.items.length ? <Empty title="Nothing logged yet" /> : (<>
+        <table className="w-full"><thead className="border-b border-line"><tr>{['When', 'Who', 'Action', 'Record', 'Details'].map((h) => <th key={h} className="th">{h}</th>)}</tr></thead>
+          <tbody className="divide-y divide-line">{q.data.items.map((a: any) => <tr key={a.id}><td className="td">{when(a.createdAt)}</td><td className="td">{a.actor?.name ?? 'System'}</td><td className="td font-medium">{a.action.replace(/_/g, ' ').toLowerCase()}</td><td className="td">{a.entity}</td><td className="td text-xs text-neutral-600 max-w-xs truncate">{a.details ? JSON.stringify(a.details) : ''}</td></tr>)}</tbody></table>
+        <Pager page={q.data.page} pageSize={q.data.pageSize} total={q.data.total} onPage={setPage} /></>)}</div>
+    </>
+  );
+}
+
+export function SettingsPage() {
+  const qc = useQueryClient(); const toast = useToast();
+  const q = useQuery({ queryKey: ['settings'], queryFn: () => api('/settings') });
+  const [name, setName] = useState<string | null>(null); const [units, setUnits] = useState<string | null>(null);
+  const m = useMutation({ mutationFn: () => api('/settings', { method: 'PUT', body: { storeName: name ?? q.data.storeName, units: (units ?? q.data.units.join(',')).split(',').map((s: string) => s.trim()).filter(Boolean) } }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['settings'] }); toast('ok', 'Settings saved'); }, onError: (e: Error) => toast('err', e.message) });
+  if (q.isLoading) return <Loading />;
+  if (q.error) return <ErrorBox error={q.error} />;
+  return (
+    <>
+      <PageHead title="Settings" />
+      <section className="card p-4 max-w-lg">
+        <Field label="Store name"><input className="input" value={name ?? q.data.storeName} onChange={(e) => setName(e.target.value)} /></Field>
+        <Field label="Units you use (comma separated)"><input className="input" value={units ?? q.data.units.join(', ')} onChange={(e) => setUnits(e.target.value)} /></Field>
+        <button className="btn btn-primary" disabled={m.isPending} onClick={() => m.mutate()}>Save settings</button>
+      </section>
+    </>
+  );
+}

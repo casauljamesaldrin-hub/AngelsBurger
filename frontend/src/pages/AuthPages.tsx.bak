@@ -1,0 +1,74 @@
+import { ReactNode, useState } from 'react';
+import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
+import { api, apiFull } from '../lib/api';
+import { useAuth } from '../lib/auth';
+import { Field } from '../components/ui';
+
+function Shell({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="min-h-screen grid place-items-center p-4">
+      <div className="card w-full max-w-sm p-6">
+        <p className="font-display text-ketchup font-bold text-lg">Angels Burger</p>
+        <h1 className="text-2xl font-bold mb-4">{title}</h1>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+export function LoginPage() {
+  const { me, refresh } = useAuth();
+  const nav = useNavigate();
+  const [err, setErr] = useState('');
+  const f = useForm({ resolver: zodResolver(z.object({ email: z.string().email('Enter a valid email'), password: z.string().min(1, 'Enter your password') })) });
+  if (me) return <Navigate to="/" replace />;
+  return (
+    <Shell title="Sign in">
+      <form onSubmit={f.handleSubmit(async (v) => { setErr(''); try { await api('/auth/login', { body: v }); refresh(); nav('/'); } catch (e: any) { setErr(e.message); } })}>
+        <Field label="Email" error={f.formState.errors.email?.message as string}><input className="input" type="email" autoComplete="username" {...f.register('email')} /></Field>
+        <Field label="Password" error={f.formState.errors.password?.message as string}><input className="input" type="password" autoComplete="current-password" {...f.register('password')} /></Field>
+        {err && <p className="err mb-2" role="alert">{err}</p>}
+        <button className="btn btn-primary w-full" disabled={f.formState.isSubmitting}>Sign in</button>
+        <p className="text-sm mt-3"><Link className="underline" to="/forgot-password">Forgot your password?</Link></p>
+      </form>
+    </Shell>
+  );
+}
+
+export function ForgotPage() {
+  const [msg, setMsg] = useState(''); const [err, setErr] = useState('');
+  const f = useForm({ resolver: zodResolver(z.object({ email: z.string().email('Enter a valid email') })) });
+  return (
+    <Shell title="Reset password">
+      {msg ? <p role="status">{msg}</p> : (
+        <form onSubmit={f.handleSubmit(async (v) => { setErr(''); try { setMsg((await apiFull('/auth/forgot-password', { body: v })).message); } catch (e: any) { setErr(e.message); } })}>
+          <Field label="Account email" error={f.formState.errors.email?.message as string}><input className="input" type="email" {...f.register('email')} /></Field>
+          {err && <p className="err mb-2" role="alert">{err}</p>}
+          <button className="btn btn-primary w-full" disabled={f.formState.isSubmitting}>Send reset link</button>
+        </form>
+      )}
+      <p className="text-sm mt-3"><Link className="underline" to="/login">Back to sign in</Link></p>
+    </Shell>
+  );
+}
+
+export function ResetPage() {
+  const [sp] = useSearchParams(); const [done, setDone] = useState(false); const [err, setErr] = useState('');
+  const schema = z.object({ password: z.string().min(10, 'Use at least 10 characters').regex(/[A-Za-z]/, 'Include a letter').regex(/\d/, 'Include a number'), confirm: z.string() }).refine((v) => v.password === v.confirm, { path: ['confirm'], message: 'Passwords do not match' });
+  const f = useForm({ resolver: zodResolver(schema) });
+  return (
+    <Shell title="Choose a new password">
+      {done ? <p role="status">Password updated. <Link className="underline" to="/login">Sign in</Link></p> : (
+        <form onSubmit={f.handleSubmit(async (v) => { setErr(''); try { await api('/auth/reset-password', { body: { token: sp.get('token') ?? '', password: v.password } }); setDone(true); } catch (e: any) { setErr(e.message); } })}>
+          <Field label="New password" error={f.formState.errors.password?.message as string}><input className="input" type="password" autoComplete="new-password" {...f.register('password')} /></Field>
+          <Field label="Confirm password" error={f.formState.errors.confirm?.message as string}><input className="input" type="password" autoComplete="new-password" {...f.register('confirm')} /></Field>
+          {err && <p className="err mb-2" role="alert">{err}</p>}
+          <button className="btn btn-primary w-full" disabled={f.formState.isSubmitting}>Save password</button>
+        </form>
+      )}
+    </Shell>
+  );
+}

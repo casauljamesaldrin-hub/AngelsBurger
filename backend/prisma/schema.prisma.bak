@@ -1,0 +1,263 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  STAFF
+}
+enum TxType {
+  STOCK_IN
+  STOCK_OUT
+  WASTE
+  ADJUSTMENT
+  ORDER_DEDUCTION
+  REVERSAL
+}
+enum OrderStatus {
+  CONFIRMED
+  COMPLETED
+  CANCELLED
+}
+enum PaymentStatus {
+  UNPAID
+  PAID
+  REFUNDED
+}
+enum EmailStatus {
+  PENDING
+  ACCEPTED
+  RETRYING
+  FAILED
+}
+enum AlertState {
+  LOW
+  OUT
+}
+
+model User {
+  id                String   @id @default(uuid())
+  email             String   @unique
+  name              String
+  passwordHash      String
+  role              Role     @default(STAFF)
+  active            Boolean  @default(true)
+  tokenVersion      Int      @default(0)
+  notifyLowStock    Boolean  @default(false)
+  notifyOutOfStock  Boolean  @default(false)
+  notifyDailySummary Boolean @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  transactions InventoryTransaction[]
+  orders       Order[]
+  resetTokens  PasswordResetToken[]
+  auditLogs    AuditLog[]
+}
+
+model Ingredient {
+  id               String    @id @default(uuid())
+  name             String    @unique
+  description      String?
+  quantity         Decimal   @default(0) @db.Decimal(14, 3)
+  unit             String
+  minThreshold     Decimal   @default(0) @db.Decimal(14, 3)
+  reorderQty       Decimal?  @db.Decimal(14, 3)
+  unitCostCentavos Int?
+  supplier         String?
+  expiresOn        DateTime?
+  batchNote        String?
+  active           Boolean   @default(true)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  transactions InventoryTransaction[]
+  recipeItems  RecipeItem[]
+  optionItems  OptionIngredient[]
+  alerts       StockAlert[]
+}
+
+model Product {
+  id            String   @id @default(uuid())
+  name          String   @unique
+  description   String?
+  imageUrl      String?
+  priceCentavos Int
+  category      String?
+  productType   String   @default("SINGLE")
+  active        Boolean  @default(true)
+  available     Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  recipe  RecipeItem[]
+  options ProductOption[]
+}
+
+model RecipeItem {
+  id           String     @id @default(uuid())
+  productId    String
+  ingredientId String
+  quantity     Decimal    @db.Decimal(14, 3)
+  notes        String?
+  product      Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  ingredient   Ingredient @relation(fields: [ingredientId], references: [id])
+
+  @@unique([productId, ingredientId])
+}
+
+model ProductOption {
+  id            String   @id @default(uuid())
+  name          String   @unique
+  priceCentavos Int      @default(0)
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+
+  products Product[]
+  items    OptionIngredient[]
+}
+
+model OptionIngredient {
+  id           String        @id @default(uuid())
+  optionId     String
+  ingredientId String
+  quantity     Decimal       @db.Decimal(14, 3)
+  option       ProductOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  ingredient   Ingredient    @relation(fields: [ingredientId], references: [id])
+
+  @@unique([optionId, ingredientId])
+}
+
+model Order {
+  id               String        @id @default(uuid())
+  seq              Int           @unique @default(autoincrement())
+  orderNumber      String?       @unique
+  idempotencyKey   String        @unique
+  status           OrderStatus   @default(CONFIRMED)
+  paymentStatus    PaymentStatus @default(UNPAID)
+  paymentMethod    String?
+  subtotalCentavos Int
+  discountCentavos Int           @default(0)
+  totalCentavos    Int
+  notes            String?
+  cancelReason     String?
+  userId           String
+  createdAt        DateTime      @default(now())
+  completedAt      DateTime?
+  cancelledAt      DateTime?
+
+  user         User                   @relation(fields: [userId], references: [id])
+  items        OrderItem[]
+  transactions InventoryTransaction[]
+
+  @@index([status, completedAt])
+  @@index([createdAt])
+}
+
+model OrderItem {
+  id                 String  @id @default(uuid())
+  orderId            String
+  productId          String?
+  productName        String
+  unitPriceCentavos  Int
+  quantity           Int
+  options            Json
+  recipeSnapshot     Json
+  lineTotalCentavos  Int
+  order              Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+}
+
+model InventoryTransaction {
+  id             String   @id @default(uuid())
+  ingredientId   String
+  type           TxType
+  quantityChange Decimal  @db.Decimal(14, 3)
+  quantityBefore Decimal  @db.Decimal(14, 3)
+  quantityAfter  Decimal  @db.Decimal(14, 3)
+  unit           String
+  reason         String?
+  notes          String?
+  reference      String?
+  orderId        String?
+  reversalOfId   String?  @unique
+  userId         String
+  createdAt      DateTime @default(now())
+
+  ingredient Ingredient @relation(fields: [ingredientId], references: [id])
+  user       User       @relation(fields: [userId], references: [id])
+  order      Order?     @relation(fields: [orderId], references: [id])
+
+  @@index([createdAt])
+  @@index([ingredientId, createdAt])
+  @@index([type, createdAt])
+  @@index([orderId])
+}
+
+model StockAlert {
+  id           String     @id @default(uuid())
+  ingredientId String
+  state        AlertState
+  active       Boolean    @default(true)
+  detectedAt   DateTime   @default(now())
+  resolvedAt   DateTime?
+  ingredient   Ingredient @relation(fields: [ingredientId], references: [id])
+
+  @@index([ingredientId, active])
+}
+
+model EmailNotification {
+  id                String      @id @default(uuid())
+  type              String
+  recipient         String
+  subject           String
+  html              String?
+  text              String?
+  dedupeKey         String?     @unique
+  status            EmailStatus @default(PENDING)
+  attempts          Int         @default(0)
+  providerMessageId String?
+  error             String?
+  userId            String?
+  ingredientId      String?
+  createdAt         DateTime    @default(now())
+  lastAttemptAt     DateTime?
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  actorId   String?
+  action    String
+  entity    String
+  entityId  String?
+  details   Json?
+  createdAt DateTime @default(now())
+  actor     User?    @relation(fields: [actorId], references: [id])
+
+  @@index([createdAt])
+  @@index([entity, entityId])
+}
+
+model Setting {
+  key   String @id
+  value Json
+}
